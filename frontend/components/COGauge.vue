@@ -21,11 +21,13 @@ const API_BASE = "http://localhost:8000"
 export default {
   data() {
     return {
-      coLevel:  50,
-      tvocPpb:  300,
-      chart:    null,
-      cx:       0,
-      cy:       0
+      coLevel:   0,
+      tvocPpb:   0,
+      chart:     null,
+      cx:        0,
+      cy:        0,
+      ready:     false,   // true only after canvas is synced and cx/cy known
+      interval:  null
     }
   },
 
@@ -45,24 +47,24 @@ export default {
   async mounted() {
     await this.$nextTick()
     this.createGauge()
-    setTimeout(async () => {
-      const arc = this.chart.getDatasetMeta(0).data[0]
-      this.cx = arc.x
-      this.cy = arc.y
-      this.syncNeedleCanvas()
-      this.drawNeedle()
-      await this.fetchData()
-      setInterval(() => this.fetchData(), 8000)
-    }, 600)
+
+    // Wait for Chart.js to finish first render before reading arc position
+    setTimeout(() => {
+      this.initNeedle()
+    }, 700)
   },
 
   beforeUnmount() {
-    if (this.chart) { this.chart.destroy(); this.chart = null }
+    if (this.interval) clearInterval(this.interval)
+    if (this.chart)    { this.chart.destroy(); this.chart = null }
+    this.ready = false
   },
 
   methods: {
     createGauge() {
-      const ctx = this.$refs.gaugeCanvas.getContext("2d")
+      const canvas = this.$refs.gaugeCanvas
+      if (!canvas) return
+      const ctx = canvas.getContext("2d")
       this.chart = new Chart(ctx, {
         type: "doughnut",
         data: {
@@ -83,16 +85,43 @@ export default {
       })
     },
 
-    syncNeedleCanvas() {
+    initNeedle() {
+      // Guard: make sure both canvases and chart are still mounted
       const gc = this.$refs.gaugeCanvas
       const nc = this.$refs.needleCanvas
+      if (!gc || !nc || !this.chart) return
+
+      // Sync needle canvas dimensions to match gauge canvas
       nc.width  = gc.width
       nc.height = gc.height
+
+      // Read arc centre from Chart.js
+      try {
+        const arc = this.chart.getDatasetMeta(0).data[0]
+        if (!arc) return
+        this.cx = arc.x
+        this.cy = arc.y
+      } catch (e) {
+        return
+      }
+
+      this.ready = true
+      this.drawNeedle()
+
+      // Start polling after needle is ready
+      this.fetchData()
+      this.interval = setInterval(() => this.fetchData(), 8000)
     },
 
     drawNeedle() {
-      const nc  = this.$refs.needleCanvas
+      // Guard: only draw if component is still mounted and ready
+      if (!this.ready) return
+      const nc = this.$refs.needleCanvas
+      if (!nc) return
+
       const ctx = nc.getContext("2d")
+      if (!ctx) return
+
       ctx.clearRect(0, 0, nc.width, nc.height)
 
       const angle = Math.PI + (this.coLevel / 100) * Math.PI
